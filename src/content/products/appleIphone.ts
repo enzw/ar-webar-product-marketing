@@ -28,7 +28,7 @@ export const appleIphone: ProductConfig = {
   scanTarget: buildProductScanTarget('apple-iphone'),
   arModel: {
     url: '/assets/models/apple-iphone/model.obj',
-    scale: [1, 1, 1],
+    scale: [0.008, 0.008, 0.008],
     position: [0, 0, 0],
     rotation: [0, 0, 0],
   },
