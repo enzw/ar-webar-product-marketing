@@ -13,6 +13,16 @@ type GLTFLoaderModule = {
     ) => void;
   };
 };
+type OBJLoaderModule = {
+  OBJLoader: new () => {
+    load: (
+      url: string,
+      onLoad: (object: import('three').Object3D) => void,
+      onProgress?: (event: ProgressEvent<EventTarget>) => void,
+      onError?: (error: unknown) => void,
+    ) => void;
+  };
+};
 
 interface UseMindArOptions {
   containerRef: RefObject<HTMLDivElement | null>;
@@ -30,6 +40,7 @@ interface UseMindArOptions {
 const MINDAR_MODULE_SPECIFIERS = ['mindar-image-three'];
 const THREE_MODULE_SPECIFIERS = ['three'];
 const GLTF_LOADER_SPECIFIERS = ['three/addons/loaders/GLTFLoader.js'];
+const OBJ_LOADER_SPECIFIERS = ['three/addons/loaders/OBJLoader.js'];
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) {
   return Promise.race<T>([
@@ -115,6 +126,21 @@ async function loadGLTFLoaderModule() {
   throw lastError instanceof Error ? lastError : new Error('Unable to load GLTFLoader module');
 }
 
+async function loadOBJLoaderModule() {
+  let lastError: unknown = null;
+
+  for (const moduleSpecifier of OBJ_LOADER_SPECIFIERS) {
+    try {
+      const moduleValue = await import(/* @vite-ignore */ moduleSpecifier);
+      return moduleValue as OBJLoaderModule;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Unable to load OBJLoader module');
+}
+
 function enforceCameraFill(container: HTMLDivElement | null) {
   if (!container) return;
 
@@ -180,6 +206,7 @@ export function useMindArRuntime({
         targetSrc: string,
         threeModule: ThreeModule,
         gltfLoaderModule: GLTFLoaderModule | null,
+        objLoaderModule: OBJLoaderModule | null,
         arModel: ProductArModelConfig | undefined,
       ) => {
         if (!containerRef.current || !window.MINDAR?.IMAGE?.MindARThree) {
@@ -217,29 +244,74 @@ export function useMindArRuntime({
         fallbackGroup.add(screen);
         anchor.group.add(fallbackGroup);
 
-        if (arModel && gltfLoaderModule) {
+        if (arModel && (gltfLoaderModule || objLoaderModule)) {
           const tryLoadModel = async () => {
             try {
-              const loader = new gltfLoaderModule.GLTFLoader();
-              const loadedModel = await withTimeout(
-                new Promise<import('three').Object3D>((resolve, reject) => {
-                  loader.load(
-                    arModel.url,
-                    (gltf) => {
-                      const root = gltf.scene ?? gltf.scenes?.[0];
-                      if (!root) {
-                        reject(new Error('GLB scene root is missing'));
-                        return;
-                      }
-                      resolve(root);
-                    },
-                    undefined,
-                    (error) => reject(error),
-                  );
-                }),
-                8000,
-                'GLB model load',
-              );
+              const isOBJ = arModel.url.toLowerCase().endsWith('.obj');
+              const isSupportedFormat = arModel.url.toLowerCase().endsWith('.glb') || isOBJ;
+
+              if (!isSupportedFormat) {
+                console.warn(`Model format not supported: ${arModel.url}. Supported: .glb, .obj`);
+                return;
+              }
+
+              let loadedModel: import('three').Object3D;
+
+              if (isOBJ) {
+                // Lazy load OBJLoader only when needed
+                let objLoader: OBJLoaderModule | null = null;
+                try {
+                  objLoader = await withTimeout(loadOBJLoaderModule(), 5000, 'OBJLoader module load');
+                } catch (loaderError) {
+                  console.warn('OBJLoader module load failed, will use fallback mesh', loaderError);
+                  return;
+                }
+
+                if (!objLoader) {
+                  console.warn('OBJLoader not available');
+                  return;
+                }
+
+                const loader = new objLoader.OBJLoader();
+                loadedModel = await withTimeout(
+                  new Promise<import('three').Object3D>((resolve, reject) => {
+                    loader.load(
+                      arModel.url,
+                      (object) => {
+                        resolve(object);
+                      },
+                      undefined,
+                      (error) => reject(error),
+                    );
+                  }),
+                  8000,
+                  'OBJ model load',
+                );
+              } else if (gltfLoaderModule) {
+                const loader = new gltfLoaderModule.GLTFLoader();
+                loadedModel = await withTimeout(
+                  new Promise<import('three').Object3D>((resolve, reject) => {
+                    loader.load(
+                      arModel.url,
+                      (gltf) => {
+                        const root = gltf.scene ?? gltf.scenes?.[0];
+                        if (!root) {
+                          reject(new Error('GLB scene root is missing'));
+                          return;
+                        }
+                        resolve(root);
+                      },
+                      undefined,
+                      (error) => reject(error),
+                    );
+                  }),
+                  8000,
+                  'GLB model load',
+                );
+              } else {
+                console.warn('No suitable 3D model loader available');
+                return;
+              }
 
               if (canceled) {
                 return;
@@ -252,7 +324,7 @@ export function useMindArRuntime({
               anchor.group.remove(fallbackGroup);
               anchor.group.add(loadedModel);
             } catch (error) {
-              console.warn('GLB model load failed, fallback mesh retained.', error);
+              console.warn('Model load failed, fallback mesh retained.', error);
             }
           };
 
@@ -277,11 +349,33 @@ export function useMindArRuntime({
           throw new Error('Browser does not support secure camera runtime');
         }
 
-        const permissionStream = await withTimeout(
-          navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false }),
-          10000,
-          'Camera permission request',
-        );
+        // Try to get camera with multiple fallback strategies
+        // Strategy 1: Try environment camera (rear camera on mobile)
+        let permissionStream: MediaStream | null = null;
+        
+        try {
+          permissionStream = await withTimeout(
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false }),
+            10000,
+            'Camera permission request (environment)',
+          );
+        } catch (strategyError) {
+          // Strategy 2: Try any available camera (includes OBS Virtual Camera, front camera, etc)
+          try {
+            permissionStream = await withTimeout(
+              navigator.mediaDevices.getUserMedia({ video: true, audio: false }),
+              10000,
+              'Camera permission request (any device)',
+            );
+          } catch (fallbackError) {
+            throw fallbackError;
+          }
+        }
+
+        if (!permissionStream) {
+          throw new Error('No camera device available');
+        }
+
         permissionGranted = true;
         permissionStream.getTracks().forEach((track) => track.stop());
         onCameraGranted(true);
@@ -290,10 +384,11 @@ export function useMindArRuntime({
         await withTimeout(loadMindARModule(), 9000, 'MindAR module load');
         const threeModule = await withTimeout(loadThreeModule(), 5000, 'Three.js module load');
         const gltfLoaderModule = await withTimeout(loadGLTFLoaderModule(), 5000, 'GLTFLoader module load').catch(() => null);
+        // OBJLoader will be loaded on-demand when needed, not at startup
 
         if (canceled || !containerRef.current || !window.MINDAR?.IMAGE?.MindARThree) return;
 
-        let runtime = buildRuntime(imageTargetSrc, threeModule, gltfLoaderModule, productArModel);
+        let runtime = buildRuntime(imageTargetSrc, threeModule, gltfLoaderModule, null, productArModel);
 
         try {
           await withTimeout(runtime.mindarThree.start(), 12000, 'MindAR start');
@@ -305,7 +400,7 @@ export function useMindArRuntime({
             throw primaryError;
           }
 
-          runtime = buildRuntime(fallbackImageTargetSrc, threeModule, gltfLoaderModule, productArModel);
+          runtime = buildRuntime(fallbackImageTargetSrc, threeModule, gltfLoaderModule, null, productArModel);
           await withTimeout(runtime.mindarThree.start(), 12000, 'MindAR fallback start');
         }
 

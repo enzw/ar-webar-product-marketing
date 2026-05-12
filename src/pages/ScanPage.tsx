@@ -95,8 +95,10 @@ export function ScanPage() {
 
   useEffect(() => {
     if (!mobile) {
-      setStage('preview');
-      setFallbackActive(true);
+      // Desktop development mode: allow full AR camera access
+      // Comment this block out to enable desktop camera testing
+      // setStage('preview');
+      // setFallbackActive(true);
     }
   }, [mobile, setFallbackActive, setStage]);
 
@@ -114,10 +116,29 @@ export function ScanPage() {
           throw new Error('Secure camera runtime is unavailable in this browser context');
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
-          audio: false,
-        });
+        // Strategy 1: Try environment camera
+        let stream: MediaStream | null = null;
+        
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' } },
+            audio: false,
+          });
+        } catch (strategyError) {
+          // Strategy 2: Try any available camera (includes OBS Virtual Camera, front camera, etc)
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: true,
+              audio: false,
+            });
+          } catch (fallbackError) {
+            throw fallbackError;
+          }
+        }
+
+        if (!stream) {
+          throw new Error('No camera device available');
+        }
 
         if (canceled) {
           stream.getTracks().forEach((track) => track.stop());
@@ -169,7 +190,7 @@ export function ScanPage() {
     onCameraGranted: setCameraGranted,
     onMarkerLocked: setMarkerLocked,
     onError: setErrorMessage,
-    enabled: mobile,
+    enabled: true, // Enable AR on all devices for development
     bootNonce,
   });
 

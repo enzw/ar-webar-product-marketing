@@ -55,6 +55,15 @@ npm install
 npm run dev
 ```
 
+## Camera sources
+- **Physical camera**: Android/iOS device camera (default)
+- **OBS Virtual Camera**: Supported! Setup:
+  1. Install [OBS Virtual Camera](https://obsproject.com/)
+  2. Create scene with your marker/content
+  3. Enable "Start Virtual Camera" in OBS
+  4. Browser will auto-detect and use it as camera source
+- **Desktop webcam**: Also supported for development testing
+
 ## Build and checks
 ```bash
 npm run build

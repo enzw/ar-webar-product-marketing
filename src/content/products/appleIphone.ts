@@ -26,6 +26,12 @@ export const appleIphone: ProductConfig = {
     offerLabel: 'Open iPhone Offer Page',
   },
   scanTarget: buildProductScanTarget('apple-iphone'),
+  arModel: {
+    url: '/assets/models/apple-iphone/model.obj',
+    scale: [1, 1, 1],
+    position: [0, 0, 0],
+    rotation: [0, 0, 0],
+  },
   offerCTA: {
     url: 'https://example.com/apple-iphone-offer',
     label: 'Open iPhone Offer Page',

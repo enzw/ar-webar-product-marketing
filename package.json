@@ -20,6 +20,7 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@types/three": "^0.184.0",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
     "@vitejs/plugin-react": "^5.2.0",
     "@zenith-xperience/mindar-offline-compiler": "^0.0.2",
     "autoprefixer": "^10.4.21",
